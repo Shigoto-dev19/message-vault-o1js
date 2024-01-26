@@ -1,3 +1,3 @@
-import { Add } from './Add.js';
+import { MessageVault } from './message-vault.js';
 
-export { Add };
+export { MessageVault };
