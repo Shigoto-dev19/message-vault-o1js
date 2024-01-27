@@ -6,8 +6,6 @@ import {
   PrivateKey,
   AccountUpdate,
   MerkleTree,
-  MerkleMap,
-  MerkleMapWitness,
 } from 'o1js';
 
 const proofsEnabled = false;
@@ -19,13 +17,13 @@ describe('msg-vault.js', () => {
   senderKey: PrivateKey, 
   zkappAddress: PublicKey,
   zkappPrivateKey: PrivateKey,
-  zkapp: MessageVault;
+  zkapp: MessageVault,
+  addressTree: MerkleTree,
+  addressIndexMap: AddressIndexMap<Field>;
 
   beforeAll(async () => {
     if (proofsEnabled) await MessageVault.compile();
-  });
 
-  beforeEach(() => {
     const Local = Mina.LocalBlockchain({ proofsEnabled });
     Mina.setActiveInstance(Local);
     ({ privateKey: deployerKey, publicKey: deployerAccount } =
@@ -35,6 +33,12 @@ describe('msg-vault.js', () => {
     zkappPrivateKey = PrivateKey.random();
     zkappAddress = zkappPrivateKey.toPublicKey();
     zkapp = new MessageVault(zkappAddress);
+
+    // initialize local address Merkle Tree
+    addressTree = new MerkleTree(8);
+
+    // initialize local address-index map
+    addressIndexMap = new AddressIndexMap();
   });
 
   async function localDeploy() { 
@@ -46,69 +50,90 @@ describe('msg-vault.js', () => {
     await txn.sign([deployerKey, zkappPrivateKey]).send();
   }
 
-  it('Generate and Deploy `MessageVault` smart contract', async () => {
-    await localDeploy();
-
+  async function initializeVault() {
     // deployer initializes zkapp
     const initTxn = await Mina.transaction(deployerAccount, () => {
       zkapp.initVault();
     });
     await initTxn.prove();
     await initTxn.sign([deployerKey]).send();
+  }
 
-    const storageCounter = zkapp.spyCount.get();
+  describe('Message Vault: Negative Address Storage', () => {
+    it('Generate and Deploy `MessageVault` smart contract', async () => {
+      await localDeploy();
+      await initializeVault();
 
-    expect(storageCounter).toEqual(Field(-1));
-  })
+      const storageCounter = zkapp.spyCount.get();
 
-  describe.skip('Message Vault: Address Storage', () => {
-    async function storeSpyAddress() { 
-      let index = zkapp.spyCount.get().add(1);
-      let w = spyTree.getWitness(index.toBigInt());
+      expect(storageCounter).toEqual(Field(-1));
+    })
+  });
+
+  describe('Message Vault: Address Storage', () => {
+    async function storeSpyAddress(senderKey=deployerKey, falseIndex?: Field, updateLocal=true) { 
+      let index = falseIndex ?? zkapp.spyCount.get().add(1);
+      let w = addressTree.getWitness(index.toBigInt());
       let randomSpyWitness = new SpyMerkleWitness(w);
 
       let randomSpyAddress = PrivateKey.random().toPublicKey();
       // storage transaction
       // retrieve and update off-chain merkle tree
-      let storeTxn = await Mina.transaction(deployerAccount, () => {
+      let storeTxn = await Mina.transaction(senderKey.toPublicKey(), () => {
         zkapp.storeAddress(randomSpyAddress, randomSpyWitness);
       });
       
       await storeTxn.prove();
-      await storeTxn.sign([deployerKey]).send();
+      await storeTxn.sign([senderKey]).send();
 
-      // update off-chain tree
-      let spyAddress = zkapp.spyAddress.get()
-      spyTree.setLeaf(index.toBigInt(), spyAddress); 
-      
-      // update local index map
-      spyIndexMap.addAddress(spyAddress, Number(index.toBigInt()))
+      if (updateLocal) { 
+        // update off-chain address tree
+        let spyAddress = zkapp.spyAddress.get()
+        addressTree.setLeaf(index.toBigInt(), spyAddress); 
+        
+        // update local address-index map
+        addressIndexMap.addAddress(spyAddress, Number(index.toBigInt()));
+      }
     }
 
-    it('should store 100 random addresses successfully', async () => {
-      await localDeploy();
-      // deployer initializes zkapp
-      const initTxn = await Mina.transaction(deployerAccount, () => {
-        zkapp.initVault();
-      });
-      await initTxn.prove();
-      await initTxn.sign([deployerKey]).send();
-      
-      for(let i=0; i<100; i++) await storeSpyAddress();      
+    it('should reject any sender except admin to store an address', async () => {
+      await expect(storeSpyAddress(senderKey)).rejects.toThrowError('Only Admin is allowed to call this method!');
     });
-    it.todo('should reject non-compliant index');
-    it.todo('should reject non-updated off-chain address merkle tree');
-    it.todo('should reject storing more than 100 addresses');
+
+    it('should reject non-compliant storage index', async () => {
+      await expect(storeSpyAddress(deployerKey, Field(10))).rejects.toThrowError('Off-chain storage index is not compliant!');
+    });
+
+    it('should successfully store one random address', async () => { 
+      await storeSpyAddress();
+    });
+
+    it('should reject non-updated off-chain address merkle tree', async () => {
+      await storeSpyAddress(deployerKey, undefined, false);
+      await expect(storeSpyAddress()).rejects.toThrowError('Off-chain address merkle tree is out of sync!');
+    });
+
+    it('should successfully store address till cap=100 is reached', async () => {
+      // update address local storage following the skipped update in the previous test-case
+      const index = zkapp.spyCount.get();
+      
+      // update off-chain address tree
+      const spyAddress = zkapp.spyAddress.get()
+      addressTree.setLeaf(index.toBigInt(), spyAddress); 
+      
+      // update local address-index map
+      addressIndexMap.addAddress(spyAddress, Number(index.toBigInt()));
+
+      for(let i=0; i<98; i++) await storeSpyAddress();      
+    });
+
+    it('should reject storing more than 100 addresses', async () => {
+      await expect(storeSpyAddress()).rejects.toThrowError('Reached maximum storage cap of 100 addresses!')
+    });
   });
 });
 
-
-// initialize a new MerkleTree with height 8 ==> size=256 > 100
-const spyTree = new MerkleTree(8);
-
-// console.log('initial commitment: ', initialCommitment.toBigInt());
-//TODO when tree not initialized check commitiment
-
+//TODO add test coverage for message storage 
 
 class AddressIndexMap<T> {
   private valueToIndexMap: Map<T, number>;
@@ -148,8 +173,3 @@ class AddressIndexMap<T> {
       return this.indexToValueArray[index];
   }
 }
-
-const spyIndexMap: AddressIndexMap<Field> = new AddressIndexMap();
-
-const map = new MerkleMap();
-console.log('empty map root: ', map.getRoot().toBigInt())
