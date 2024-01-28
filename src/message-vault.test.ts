@@ -16,7 +16,7 @@ import {
 
 const proofsEnabled = false;
 
-describe.skip('msg-vault.js', () => {
+describe.only('msg-vault.js', () => {
   let deployerAccount: PublicKey,
   deployerKey: PrivateKey,
   senderAccount: PublicKey,
@@ -115,12 +115,8 @@ describe.skip('msg-vault.js', () => {
     it('should reject tx for non-updated off-chain address merkle tree', async () => {
       await storeSpyAddress(deployerKey, undefined, false);
       await expect(storeSpyAddress()).rejects.toThrowError('Off-chain address merkle tree is out of sync!');
-    });
 
-    it.todo('should reject tx for addressWitness of non-empty leaf')
-
-    it('should successfully store address till cap=100 is reached', async () => {
-      // update address local storage following the skipped update in the previous test-case
+      // update address local storage following the skipped update to keep integrity for the next test cases
       const index = zkapp.spyCount.get();
       
       // update off-chain address tree
@@ -129,7 +125,45 @@ describe.skip('msg-vault.js', () => {
       
       // update local address-index map
       addressIndexMap.addAddress(spyAddress, Number(index.toBigInt()));
+    });
 
+    it('should reject tx for a tampered off-chain address merkle tree: fill empty leaf', async () => {
+      // fetch an index for an empty leaf
+      let leafIndex = zkapp.spyCount.get().add(2);
+
+      // random impostor address
+      const impostorAddress = Field.random();
+      
+      // tamper with local address Merkle Tree
+      addressTree.setLeaf(leafIndex.toBigInt(), impostorAddress);
+      
+      await expect(storeSpyAddress()).rejects.toThrowError('Off-chain address merkle tree is out of sync!');
+
+      // fix local merkle tree to keep integrity for the next test-case
+      addressTree.setLeaf(leafIndex.toBigInt(), Field(0));
+    });
+
+    it('should reject tx for a tampered off-chain address merkle tree: alter full leaf', async () => {
+      // fetch an index for an already full leaf 
+      // --> in this case, the first leaf
+      let fullIndex = 0n;
+
+      // keep the right address to fix the leaf later 
+      let correctLeaf = addressTree.getNode(0, fullIndex);
+
+      // random impostor address
+      const impostorAddress = Field.random();
+      
+      // tamper with local address Merkle Tree
+      addressTree.setLeaf(fullIndex, impostorAddress);
+      
+      await expect(storeSpyAddress()).rejects.toThrowError('Off-chain address merkle tree is out of sync!');
+
+      // fix local merkle tree to keep integrity for the next test-case
+      addressTree.setLeaf(fullIndex, correctLeaf);
+    });
+
+    it('should successfully store address till cap=100 is reached', async () => {
       for(let i=0; i<98; i++) await storeSpyAddress();      
     });
 
@@ -254,7 +288,7 @@ describe('msg-vault.js MESSENGER', () => {
       }
     }
 
-    it('should successfully store 50 random addresses ', async () => {
+    it('should successfully store 30 random addresses ', async () => {
       await localDeploy();
       await initializeVault();
 
@@ -315,7 +349,7 @@ describe('msg-vault.js MESSENGER', () => {
     });
 
     it('should reject tx for an eligible address that already sent a message', async () => {
-      // this case the deployer(admin) is an eligible address
+      // in this case, the deployer(admin) is an eligible address
       await storeSpyAddress(deployerKey);
 
       // no need to fund the deployer account because it is a pre-funded test account
@@ -346,7 +380,6 @@ describe('msg-vault.js MESSENGER', () => {
 
 //TODO wrap fund inside storeMessage function 
 //TODO add test coverage for message flag validation 
-//TODO add the missing test for storing address on full leaf
 //TODO fix the notation of the addressIndexMap to keyIndexMap/accountKeyIndexMap
 
 class AddressIndexMap<T> {
