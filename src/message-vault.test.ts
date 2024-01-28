@@ -25,8 +25,7 @@ describe('Message Vault: Address Storage Tests', () => {
   zkappAddress: PublicKey,
   zkappPrivateKey: PrivateKey,
   zkapp: MessageVault,
-  addressTree: MerkleTree,
-  addressIndexMap: AddressIndexMap<Field>;
+  addressTree: MerkleTree;
 
   beforeAll(async () => {
     if (proofsEnabled) await MessageVault.compile();
@@ -43,9 +42,6 @@ describe('Message Vault: Address Storage Tests', () => {
 
     // initialize local address Merkle Tree
     addressTree = new MerkleTree(8);
-
-    // initialize local address-index map
-    addressIndexMap = new AddressIndexMap();
   });
 
   async function localDeploy() { 
@@ -85,9 +81,6 @@ describe('Message Vault: Address Storage Tests', () => {
       // update off-chain address tree
       let spyAddress = zkapp.spyAddress.get()
       addressTree.setLeaf(index.toBigInt(), spyAddress); 
-      
-      // update local address-index map
-      addressIndexMap.addAddress(spyAddress, Number(index.toBigInt()));
     }
   }
   
@@ -122,9 +115,6 @@ describe('Message Vault: Address Storage Tests', () => {
     // update off-chain address tree
     const spyAddress = zkapp.spyAddress.get()
     addressTree.setLeaf(index.toBigInt(), spyAddress); 
-    
-    // update local address-index map
-    addressIndexMap.addAddress(spyAddress, Number(index.toBigInt()));
   });
 
   it('should reject tx for a tampered off-chain address merkle tree: fill empty leaf', async () => {
@@ -185,7 +175,7 @@ describe('Message Vault: Message Storage Tests', () => {
   zkappPrivateKey: PrivateKey,
   zkapp: MessageVault,
   addressTree: MerkleTree,
-  addressIndexMap: AddressIndexMap<PrivateKey>,
+  accountKeyIndexMap: ValueIndexMap<PrivateKey>,
   messageTree: MerkleTree;
 
   beforeAll(async () => {
@@ -205,7 +195,7 @@ describe('Message Vault: Message Storage Tests', () => {
     addressTree = new MerkleTree(8);
 
     // initialize local address-index map
-    addressIndexMap = new AddressIndexMap();
+    accountKeyIndexMap = new ValueIndexMap();
 
     // initialize local message Merkle Tree
     messageTree = new MerkleTree(8);
@@ -251,7 +241,7 @@ describe('Message Vault: Message Storage Tests', () => {
     addressTree.setLeaf(index.toBigInt(), spyAddress); 
     
     // update local address-index map
-    addressIndexMap.addAddress(randomSpyKey, Number(index.toBigInt()));
+    accountKeyIndexMap.addValue(randomSpyKey, Number(index.toBigInt()));
   }
   
   async function fundAccount(accountAddress: PublicKey) {
@@ -266,7 +256,7 @@ describe('Message Vault: Message Storage Tests', () => {
 
   async function storeMessage(senderKey: PrivateKey, falseMessageIndex?: number, updateLocal=true) {    
     // hash sender address & fetch its corresponding index from the local address-index map
-    let senderIndex = addressIndexMap.getIndex(senderKey)!;
+    let senderIndex = accountKeyIndexMap.getIndex(senderKey)!;
     
     let w1 = addressTree.getWitness(BigInt(senderIndex));
     let addressWitness = new SpyMerkleWitness(w1);
@@ -276,6 +266,7 @@ describe('Message Vault: Message Storage Tests', () => {
     let w2 = messageTree.getWitness(BigInt(falseMessageIndex ?? senderIndex));
     let messageWitness = new MessageMerkleWitness(w2);
 
+    // use a fixed valid message
     let message = Field(123423432423423434100000n);
     
     let messageTxn = await Mina.transaction(senderAddress, () => {
@@ -299,21 +290,21 @@ describe('Message Vault: Message Storage Tests', () => {
   });
 
   it('should successfully store one message from one random eligible address', async () => {
-    let randomStoredAddress = addressIndexMap.getRandomAddress()!;
+    let randomEligibleAccountKey = accountKeyIndexMap.getRandomValue()!;
     
     // fund account to pay for the transaction fees
-    await fundAccount(randomStoredAddress.toPublicKey());
+    await fundAccount(randomEligibleAccountKey.toPublicKey());
     
-    await storeMessage(randomStoredAddress);
+    await storeMessage(randomEligibleAccountKey);
   });
 
   it('should successfully store messages from 20 eligible address', async () => {
-      let randomStoredAddress: PrivateKey;
+      let randomEligibleAccountKey: PrivateKey;
         
     for (let i=0; i<20; i++) {
-      randomStoredAddress = addressIndexMap.getRandomAddress()!;
-      await fundAccount(randomStoredAddress.toPublicKey());
-      await storeMessage(randomStoredAddress);
+      randomEligibleAccountKey = accountKeyIndexMap.getRandomValue()!;
+      await fundAccount(randomEligibleAccountKey.toPublicKey());
+      await storeMessage(randomEligibleAccountKey);
     }
     
     const messageCount = zkapp.messageCount.get();
@@ -327,7 +318,7 @@ describe('Message Vault: Message Storage Tests', () => {
     addressTree.setLeaf(101n, Poseidon.hash(impostorKey.toPublicKey().toFields()));
     
     // tamper with local address-index map 
-    addressIndexMap.addAddress(impostorKey);
+    accountKeyIndexMap.addValue(impostorKey);
 
     // fund impostor account to pay for the tx fees
     await fundAccount(impostorKey.toPublicKey());
@@ -340,15 +331,15 @@ describe('Message Vault: Message Storage Tests', () => {
     no longer valid for further test-cases 
     */
     addressTree.setLeaf(101n, Field(0));
-    addressIndexMap.emptyIndex(impostorKey);
+    accountKeyIndexMap.emptyIndex(impostorKey);
   });
 
   // this test verifies compliant binding of address Merkle Tree and message Merkle Tree
   it('should reject tx for non-compliant addressTree and messageTree leaf index', async () => {
-    let randomStoredAddress = addressIndexMap.getRandomAddress()!;
-    await fundAccount(randomStoredAddress.toPublicKey());
+    let randomEligibleAccountKey = accountKeyIndexMap.getRandomValue()!;
+    await fundAccount(randomEligibleAccountKey.toPublicKey());
     
-    await expect(storeMessage(randomStoredAddress, 101)).rejects.toThrowError('Both addressWitness and messageWitness should point to the same leaf index!');
+    await expect(storeMessage(randomEligibleAccountKey, 101)).rejects.toThrowError('Both addressWitness and messageWitness should point to the same leaf index!');
   });
 
   it('should reject tx for an eligible address that already sent a message', async () => {
@@ -367,16 +358,16 @@ describe('Message Vault: Message Storage Tests', () => {
   });
 
   it('should reject tx for non-updated off-chain message merkle tree', async () => {
-    let randomStoredAddress1 = addressIndexMap.getRandomAddress()!;
-    await fundAccount(randomStoredAddress1.toPublicKey());
+    let randomEligibleAccountKey1 = accountKeyIndexMap.getRandomValue()!;
+    await fundAccount(randomEligibleAccountKey1.toPublicKey());
     // storeemessage without updating local message Merkle Tree
-    await storeMessage(randomStoredAddress1, undefined, false);
+    await storeMessage(randomEligibleAccountKey1, undefined, false);
 
-    let randomStoredAddress2 = addressIndexMap.getRandomAddress()!;
-    await fundAccount(randomStoredAddress2.toPublicKey());
+    let randomEligibleAccountKey2 = accountKeyIndexMap.getRandomValue()!;
+    await fundAccount(randomEligibleAccountKey2.toPublicKey());
     
     const expectedError = 'Non-compliant Messge Tree Root! Leaf message is already full or off-chain message Merkle Tree is out of sync!';
-    await expect(storeMessage(randomStoredAddress2)).rejects.toThrowError(expectedError);
+    await expect(storeMessage(randomEligibleAccountKey2)).rejects.toThrowError(expectedError);
   });
 });
 
@@ -439,10 +430,15 @@ describe('Message validation tests', () => {
 });
 
 //TODO wrap calling fund inside storeMessage function 
-//TODO add test coverage for message flag validation 
 //TODO fix the notation of the addressIndexMap to keyIndexMap/accountKeyIndexMap
 //TODO add assertions for all vault init values
-class AddressIndexMap<T> {
+
+/**
+ * This class is a test utility to keep track of the eligible addresses stored in the address Merkle Tree.
+ * It is updated parallely when storing eligible addresses and used to fetch the index of eligible address to
+ * simulate an eligible address interacting him/herself with the zkapp to store a message.
+ */
+class ValueIndexMap<T> {
   private valueToIndexMap: Map<T, number>;
   private indexToValueArray: T[];
   private fetchedIndices: Set<number>;
@@ -453,8 +449,8 @@ class AddressIndexMap<T> {
       this.fetchedIndices = new Set<number>();
   }
 
-  // Add an address to the map with an optional index
-  addAddress(value: T, index?: number): void {
+  // Add a value to the map with an optional index
+  addValue(value: T, index?: number): void {
     if (index !== undefined) {
         // If index is provided, use it
         if (index < 0 || index > this.indexToValueArray.length) {
@@ -470,7 +466,7 @@ class AddressIndexMap<T> {
 
     this.valueToIndexMap.set(value, index);
     this.indexToValueArray[index] = value;
-}
+  }
 
   // Get the index of a value
   getIndex(value: T): number | undefined {
@@ -478,12 +474,12 @@ class AddressIndexMap<T> {
   }
 
   // Get the value at a specific index
-  getAddressAtIndex(index: number): T | undefined {
+  getValueAtIndex(index: number): T | undefined {
       return this.indexToValueArray[index];
   }
 
   // Get a random value from the map that wasn't fetched before
-  getRandomAddress(): T | undefined {
+  getRandomValue(): T | undefined {
     const remainingIndices = this.indexToValueArray
         .map((_, index) => index)
         .filter(index => !this.fetchedIndices.has(index));
