@@ -15,6 +15,7 @@ export {
     MessageVault,
     SpyMerkleWitness,
     MessageMerkleWitness,
+    validateMessage,
 }
 
 class SpyMerkleWitness extends MerkleWitness(8) {}
@@ -109,7 +110,7 @@ class MessageVault extends SmartContract {
             --> this also binds messages to the size=100 storage limit.
         */
         let spyCommitment = addressWitness.calculateRoot(senderAddressDigest);
-        spyCommitment.assertEquals(this.addressCommitment.getAndRequireEquals());
+        spyCommitment.assertEquals(this.addressCommitment.getAndRequireEquals(), 'Your account is not eligible to send a message!');
         
         // calculate the index where the eligible address is stored
         let addressIndex = addressWitness.calculateIndex();
@@ -121,7 +122,7 @@ class MessageVault extends SmartContract {
         - assert that the index of the message to be store is the same as the index of the sender address
             --> this ensures compliant binding of address to message following the same index
          */
-        messageIndex.assertEquals(addressIndex);
+        messageIndex.assertEquals(addressIndex, 'Both addressWitness and messageWitness should point to the same leaf index!');
 
         /* 
         1. check that the message leaf is empty 
@@ -130,7 +131,7 @@ class MessageVault extends SmartContract {
             --> a witness of an empty leaf(before update) maintains the same root(commitiment)
         */ 
         let currentMessageCommitment = messageWitness.calculateRoot(Field(0));
-        this.messageCommitment.getAndRequireEquals().assertEquals(currentMessageCommitment);
+        this.messageCommitment.getAndRequireEquals().assertEquals(currentMessageCommitment, 'Non-compliant Messge Tree Root! Leaf message is already full or off-chain message Merkle Tree is out of sync!');
         
         // validate message flags
         validateMessage(message); 
@@ -162,8 +163,6 @@ class MessageVault extends SmartContract {
     }
 }
 
-//TODO Bind address tree to the message merkle map
-
 function validateMessage(message: Field) {
     // Use a bitmask to extract the last six digits
     const slicedMessage = Provable.witness(Provable.Array(Field, 2), () => {
@@ -194,30 +193,23 @@ function validateMessage(message: Field) {
 
     let flagsChecker = Field(0);
     for (const [index, flag] of flags.entries()) { 
-        flagsChecker = flagsChecker.add(flag.toField().mul(10 ** index))
+        flagsChecker = flagsChecker.add(flag.toField().mul(10 ** index));
     }
 
     // check integrity of converting the six digit filed into an array of 6 flags
     flagsChecker.assertEquals(lastSixDigits, 'Error Separating Message Flags!');
     
-    const [flag1, flag2, flag3, flag4, flag5, flag6] = flags;
+    const [flag1, flag2, flag3, flag4, flag5, flag6] = flags.reverse();
     
     // if flag 1 is true, then all other flags must be false
-    const rule1 = flag1.and(lastSixDigits.equals(100_000).not());
-    rule1.assertFalse('Invalid Message! Rule1 is violated!');
+    const rule1 = flag1.not().or(lastSixDigits.equals(100_000));
+    rule1.assertTrue('Invalid Message! Rule1 is violated!');
     
     // if flag 2 is true, then flag 3 must also be true.
-    const rule2 = flag2.and(flag3.not());
-    rule2.assertFalse('Invalid Message! Rule2 is violated!');
+    const rule2 = flag2.not().or(flag2.and(flag3));
+    rule2.assertTrue('Invalid Message! Rule2 is violated!');
 
     // if flag 4 is true, then flags 5 and 6 must be false.
     const rule3 = flag4.and(flag5.or(flag6));
     rule3.assertFalse('Invalid Message! Rule3 is violated!');
 }
-
-// import { Gadgets } from 'o1js';
-// const randomMessage = Field(1234234324234234340100100n)//Field.random();
-// console.log('random message: ', randomMessage.toBigInt());
-// const messageBits = randomMessage.toBits();
-
-// console.log('using function: ', validateMessage(randomMessage))

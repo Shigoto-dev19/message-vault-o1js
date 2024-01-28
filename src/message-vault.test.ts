@@ -3,6 +3,7 @@ import {
   MessageVault, 
   SpyMerkleWitness,
   MessageMerkleWitness,
+  validateMessage,
 } from './message-vault';
 import { 
   Field,
@@ -16,7 +17,7 @@ import {
 
 const proofsEnabled = false;
 
-describe.only('msg-vault.js', () => {
+describe('Message Vault: Address Storage', () => {
   let deployerAccount: PublicKey,
   deployerKey: PrivateKey,
   senderAccount: PublicKey,
@@ -226,6 +227,10 @@ describe('msg-vault.js MESSENGER', () => {
     await initTxn.sign([deployerKey]).send();
   }
 
+  /**
+   * These tests handle a single valid message case.
+   * Note that message validation is tested separately!
+   */ 
   describe('Message Vault: Message Storage', () => {
     async function storeSpyAddress(spyKey?: PrivateKey) { 
       let index = zkapp.spyCount.get().add(1);
@@ -378,7 +383,7 @@ describe('msg-vault.js MESSENGER', () => {
   });
 });
 
-//TODO wrap fund inside storeMessage function 
+//TODO wrap calling fund inside storeMessage function 
 //TODO add test coverage for message flag validation 
 //TODO fix the notation of the addressIndexMap to keyIndexMap/accountKeyIndexMap
 
@@ -436,7 +441,7 @@ class AddressIndexMap<T> {
     this.fetchedIndices.add(randomIndex);
 
     return this.indexToValueArray[randomIndex];
-}
+  }
 
   // Empty an index for a given value
   emptyIndex(value: T): void {
@@ -449,3 +454,62 @@ class AddressIndexMap<T> {
     }
   }
 }
+
+describe.only('Message validation tests', () => {
+  describe('flags format', () => {
+    it('valid case', () => {
+      const validMessage = Field(123422343234324234234340_100000n);
+      validateMessage(validMessage);
+    });
+
+    it('invalid case', () => {
+      const invalidMessage = Field(1234223432343242342343401_230000n);
+
+      const expectedErrorMessage = 'Error Validating Message! All flags are not of size 1 bit!';
+      expect(() => validateMessage(invalidMessage)).toThrowError(expectedErrorMessage);
+    });
+  });
+
+  describe('rule1', () => {
+    it('valid case', () => {
+      const validMessage = Field(1234234324234234340_100000n);
+      validateMessage(validMessage);
+    });
+
+    it('invalid case', () => {
+      const invalidMessage = Field(1234234324234234340_111000n);
+
+      const expectedErrorMessage = 'Invalid Message! Rule1 is violated!';
+      expect(() => validateMessage(invalidMessage)).toThrowError(expectedErrorMessage);
+    });
+  });
+
+  describe('rule2', () => {
+    it('valid case', () => {
+      const validMessage = Field(1234234324234234340_011_000n);
+      validateMessage(validMessage);
+    });
+
+    it('invalid case', () => {
+      const invalidMessage = Field(12342234323432423423434_010_000n);
+
+      const expectedErrorMessage = ('Invalid Message! Rule2 is violated!');
+      expect(() => validateMessage(invalidMessage)).toThrowError(expectedErrorMessage);
+    });
+  });
+
+  describe('rule3', () => {
+    it('valid case', () => {
+      const validMessage = Field(1234234324234234340_011_100n);
+      validateMessage(validMessage);
+    });
+
+    it('invalid case', () => {
+      const invalidMessage = Field(12342234323432423423434_011_101n);
+
+      const expectedErrorMessage = 'Invalid Message! Rule3 is violated!';
+      expect(() => validateMessage(invalidMessage)).toThrowError(expectedErrorMessage);
+    });
+  });
+  
+});
