@@ -254,7 +254,7 @@ describe('Message Vault: Message Storage Tests', () => {
     await tx.sign([payerKey]).send();
   }
 
-  async function storeMessage(senderKey: PrivateKey, falseMessageIndex?: number, updateLocal=true) {    
+  async function storeMessage(senderKey: PrivateKey, falseMessageIndex?: number, updateLocal=true, fundEnabled=true) {    
     // hash sender address & fetch its corresponding index from the local address-index map
     let senderIndex = accountKeyIndexMap.getIndex(senderKey)!;
     
@@ -269,6 +269,9 @@ describe('Message Vault: Message Storage Tests', () => {
     // use a fixed valid message
     let message = Field(123423432423423434100000n);
     
+    // fund account to pay for the transaction fees
+    if (fundEnabled) await fundAccount(senderAddress);
+
     let messageTxn = await Mina.transaction(senderAddress, () => {
       zkapp.checkAndStoreMessage(addressWitness, message, messageWitness);
     });
@@ -291,10 +294,6 @@ describe('Message Vault: Message Storage Tests', () => {
 
   it('should successfully store one message from one random eligible address', async () => {
     let randomEligibleAccountKey = accountKeyIndexMap.getRandomValue()!;
-    
-    // fund account to pay for the transaction fees
-    await fundAccount(randomEligibleAccountKey.toPublicKey());
-    
     await storeMessage(randomEligibleAccountKey);
   });
 
@@ -303,7 +302,6 @@ describe('Message Vault: Message Storage Tests', () => {
         
     for (let i=0; i<20; i++) {
       randomEligibleAccountKey = accountKeyIndexMap.getRandomValue()!;
-      await fundAccount(randomEligibleAccountKey.toPublicKey());
       await storeMessage(randomEligibleAccountKey);
     }
     
@@ -320,9 +318,6 @@ describe('Message Vault: Message Storage Tests', () => {
     // tamper with local address-index map 
     accountKeyIndexMap.addValue(impostorKey);
 
-    // fund impostor account to pay for the tx fees
-    await fundAccount(impostorKey.toPublicKey());
-
     await expect(storeMessage(impostorKey)).rejects.toThrowError('Your account is not eligible to send a message!');
     
     /*
@@ -336,10 +331,10 @@ describe('Message Vault: Message Storage Tests', () => {
 
   // this test verifies compliant binding of address Merkle Tree and message Merkle Tree
   it('should reject tx for non-compliant addressTree and messageTree leaf index', async () => {
-    let randomEligibleAccountKey = accountKeyIndexMap.getRandomValue()!;
-    await fundAccount(randomEligibleAccountKey.toPublicKey());
-    
-    await expect(storeMessage(randomEligibleAccountKey, 101)).rejects.toThrowError('Both addressWitness and messageWitness should point to the same leaf index!');
+    let randomEligibleAccountKey = accountKeyIndexMap.getRandomValue()!;    
+
+    const expectedErrorMessage = 'Both addressWitness and messageWitness should point to the same leaf index!'
+    await expect(storeMessage(randomEligibleAccountKey, 101)).rejects.toThrowError(expectedErrorMessage);
   });
 
   it('should reject tx for an eligible address that already sent a message', async () => {
@@ -347,24 +342,23 @@ describe('Message Vault: Message Storage Tests', () => {
     await storeSpyAddress(deployerKey);
 
     // no need to fund the deployer account because it is a pre-funded test account
-    await storeMessage(deployerKey);
+    await storeMessage(deployerKey, undefined, true, false);
     
     /* 
     - the address has already stored a message so it should revert.
     - verifies that one address is only allowed to send a message once.
       */
     const expectedError = 'Non-compliant Messge Tree Root! Leaf message is already full or off-chain message Merkle Tree is out of sync!';
-    await expect(storeMessage(deployerKey)).rejects.toThrowError(expectedError);
+    await expect(storeMessage(deployerKey, undefined, true, false)).rejects.toThrowError(expectedError);
   });
 
   it('should reject tx for non-updated off-chain message merkle tree', async () => {
     let randomEligibleAccountKey1 = accountKeyIndexMap.getRandomValue()!;
-    await fundAccount(randomEligibleAccountKey1.toPublicKey());
-    // storeemessage without updating local message Merkle Tree
+
+    // store message without updating local message Merkle Tree
     await storeMessage(randomEligibleAccountKey1, undefined, false);
 
     let randomEligibleAccountKey2 = accountKeyIndexMap.getRandomValue()!;
-    await fundAccount(randomEligibleAccountKey2.toPublicKey());
     
     const expectedError = 'Non-compliant Messge Tree Root! Leaf message is already full or off-chain message Merkle Tree is out of sync!';
     await expect(storeMessage(randomEligibleAccountKey2)).rejects.toThrowError(expectedError);
@@ -430,8 +424,8 @@ describe('Message validation tests', () => {
 });
 
 //TODO wrap calling fund inside storeMessage function 
-//TODO fix the notation of the addressIndexMap to keyIndexMap/accountKeyIndexMap
 //TODO add assertions for all vault init values
+//TODO? refactor tests 
 
 /**
  * This class is a test utility to keep track of the eligible addresses stored in the address Merkle Tree.
