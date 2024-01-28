@@ -17,10 +17,30 @@ import {
 
 const proofsEnabled = false;
 
+async function localDeploy(zkapp: MessageVault, deployerKey: PrivateKey, zkappPrivateKey: PrivateKey) { 
+  const deployerAccount = deployerKey.toPublicKey();
+  const txn = await Mina.transaction(deployerAccount, () => {
+    AccountUpdate.fundNewAccount(deployerAccount);
+    zkapp.deploy();
+  });
+  await txn.prove();
+  await txn.sign([deployerKey, zkappPrivateKey]).send();
+}
+
+async function initializeMessageVault(zkapp: MessageVault, deployerKey: PrivateKey) {
+  const deployerAccount = deployerKey.toPublicKey();
+  
+  // deployer initializes zkapp
+  const initTxn = await Mina.transaction(deployerAccount, () => {
+    zkapp.initVault();
+  });
+
+  await initTxn.prove();
+  await initTxn.sign([deployerKey]).send();
+}
+
 describe('Message Vault: Address Storage Tests', () => {
-  let deployerAccount: PublicKey,
-  deployerKey: PrivateKey,
-  senderAccount: PublicKey,
+  let deployerKey: PrivateKey,
   senderKey: PrivateKey, 
   zkappAddress: PublicKey,
   zkappPrivateKey: PrivateKey,
@@ -30,12 +50,15 @@ describe('Message Vault: Address Storage Tests', () => {
   beforeAll(async () => {
     if (proofsEnabled) await MessageVault.compile();
 
+    // setup local blockchain
     const Local = Mina.LocalBlockchain({ proofsEnabled });
     Mina.setActiveInstance(Local);
-    ({ privateKey: deployerKey, publicKey: deployerAccount } =
-      Local.testAccounts[0]);
-    ({ privateKey: senderKey, publicKey: senderAccount } =
-      Local.testAccounts[1]);
+
+    // Local.testAccounts is an array of 10 test accounts that have been pre-filled with Mina
+    deployerKey = Local.testAccounts[0].privateKey;
+    senderKey = Local.testAccounts[1].privateKey;
+    
+    // zkapp account
     zkappPrivateKey = PrivateKey.random();
     zkappAddress = zkappPrivateKey.toPublicKey();
     zkapp = new MessageVault(zkappAddress);
@@ -43,24 +66,6 @@ describe('Message Vault: Address Storage Tests', () => {
     // initialize local address Merkle Tree
     addressTree = new MerkleTree(8);
   });
-
-  async function localDeploy() { 
-    const txn = await Mina.transaction(deployerAccount, () => {
-      AccountUpdate.fundNewAccount(deployerAccount);
-      zkapp.deploy();
-    });
-    await txn.prove();
-    await txn.sign([deployerKey, zkappPrivateKey]).send();
-  }
-
-  async function initializeVault() {
-    // deployer initializes zkapp
-    const initTxn = await Mina.transaction(deployerAccount, () => {
-      zkapp.initVault();
-    });
-    await initTxn.prove();
-    await initTxn.sign([deployerKey]).send();
-  }
 
   async function storeSpyAddress(senderKey=deployerKey, falseIndex?: Field, updateLocal=true) { 
     let index = falseIndex ?? zkapp.spyCount.get().add(1);
@@ -85,12 +90,11 @@ describe('Message Vault: Address Storage Tests', () => {
   }
   
   it('Generate and Deploy `MessageVault` smart contract', async () => {
-    await localDeploy();
-    await initializeVault();
+    await localDeploy(zkapp, deployerKey, zkappPrivateKey);
+    await initializeMessageVault(zkapp, deployerKey);
 
-    const storageCounter = zkapp.spyCount.get();
-
-    expect(storageCounter).toEqual(Field(-1));
+    const storageCount = zkapp.spyCount.get();
+    expect(storageCount).toEqual(Field(-1));
   });
 
   it('should reject tx for any sender except admin to store an address', async () => {
@@ -167,8 +171,7 @@ describe('Message Vault: Address Storage Tests', () => {
  * Note: message validation function is tested separately!
  */ 
 describe('Message Vault: Message Storage Tests', () => {
-  let deployerAccount: PublicKey,
-  deployerKey: PrivateKey,
+  let deployerKey: PrivateKey,
   payerAccount: PublicKey,
   payerKey: PrivateKey, 
   zkappAddress: PublicKey,
@@ -181,15 +184,19 @@ describe('Message Vault: Message Storage Tests', () => {
   beforeAll(async () => {
     if (proofsEnabled) await MessageVault.compile();
 
-    const Local = Mina.LocalBlockchain({ proofsEnabled });
-    Mina.setActiveInstance(Local);
-    ({ privateKey: deployerKey, publicKey: deployerAccount } =
-      Local.testAccounts[0]);
-    ({ privateKey: payerKey, publicKey: payerAccount } =
-      Local.testAccounts[1]);
-    zkappPrivateKey = PrivateKey.random();
-    zkappAddress = zkappPrivateKey.toPublicKey();
-    zkapp = new MessageVault(zkappAddress);
+     // setup local blockchain
+     const Local = Mina.LocalBlockchain({ proofsEnabled });
+     Mina.setActiveInstance(Local);
+ 
+     // Local.testAccounts is an array of 10 test accounts that have been pre-filled with Mina
+     deployerKey = Local.testAccounts[0].privateKey;
+     payerKey = Local.testAccounts[1].privateKey;
+     payerAccount = Local.testAccounts[1].publicKey;
+     
+     // zkapp account
+     zkappPrivateKey = PrivateKey.random();
+     zkappAddress = zkappPrivateKey.toPublicKey();
+     zkapp = new MessageVault(zkappAddress);
 
     // initialize local address Merkle Tree
     addressTree = new MerkleTree(8);
@@ -201,25 +208,6 @@ describe('Message Vault: Message Storage Tests', () => {
     messageTree = new MerkleTree(8);
   });
 
-  async function localDeploy() { 
-    const txn = await Mina.transaction(deployerAccount, () => {
-      AccountUpdate.fundNewAccount(deployerAccount);
-      zkapp.deploy();
-    });
-    await txn.prove();
-    await txn.sign([deployerKey, zkappPrivateKey]).send();
-  }
-
-  async function initializeVault() {
-    // deployer initializes zkapp
-    const initTxn = await Mina.transaction(deployerAccount, () => {
-      zkapp.initVault();
-    });
-    await initTxn.prove();
-    await initTxn.sign([deployerKey]).send();
-  }
-
-  
   async function storeSpyAddress(spyKey?: PrivateKey) { 
     let index = zkapp.spyCount.get().add(1);
     let w = addressTree.getWitness(index.toBigInt());
@@ -285,11 +273,11 @@ describe('Message Vault: Message Storage Tests', () => {
     }
   }
 
-  it('should successfully store 40 random addresses ', async () => {
-    await localDeploy();
-    await initializeVault();
+  it('should successfully store 50 random addresses ', async () => {
+    await localDeploy(zkapp, deployerKey, zkappPrivateKey);
+    await initializeMessageVault(zkapp, deployerKey);
 
-    for(let i=0; i<40; i++) await storeSpyAddress();      
+    for(let i=0; i<50; i++) await storeSpyAddress();      
   });
 
   it('should successfully store one message from one random eligible address', async () => {
@@ -342,6 +330,7 @@ describe('Message Vault: Message Storage Tests', () => {
     await storeSpyAddress(deployerKey);
 
     // no need to fund the deployer account because it is a pre-funded test account
+    //! Funding the test account again will throw an error => fundEnabled=false
     await storeMessage(deployerKey, undefined, true, false);
     
     /* 
@@ -423,10 +412,6 @@ describe('Message validation tests', () => {
   });
 });
 
-//TODO wrap calling fund inside storeMessage function 
-//TODO add assertions for all vault init values
-//TODO? refactor tests 
-
 /**
  * This class is a test utility to keep track of the eligible addresses stored in the address Merkle Tree.
  * It is updated parallely when storing eligible addresses and used to fetch the index of eligible address to
@@ -499,3 +484,7 @@ class ValueIndexMap<T> {
     }
   }
 }
+
+//! NOTE: Address Storage Tests & Message Storage Tests are run respectively on two different local blockchains!
+//TODO? refactor storeSpyAddress
+//TODO? fix notation consistency when inferring spy
